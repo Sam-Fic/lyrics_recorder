@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>歌词录音 WebUI（手机麦克风）</title>
+<style>
+  :root { --bg:#0f1115; --card:#1a1d24; --fg:#e6e6e6; --accent:#4caf50; --danger:#f44336; --muted:#9aa0a6; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--fg); padding:12px; }
+  h1 { font-size:1.25rem; margin:4px 0 12px; }
+  h3 { font-size:1rem; margin:14px 0 8px; color:var(--muted); }
+  .card { background:var(--card); border-radius:10px; padding:12px; margin-bottom:12px; }
+  textarea { width:100%; height:140px; background:#0c0e12; color:var(--fg); border:1px solid #2a2f38;
+             border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
+  button { font-size:16px; border:none; border-radius:8px; padding:10px 14px; color:#fff; background:var(--accent);
+           cursor:pointer; }
+  button:active { opacity:.85; }
+  button.sec { background:#3a4150; }
+  button.danger { background:var(--danger); }
+  button:disabled { opacity:.5; cursor:default; }
+  select { font-size:16px; padding:6px 8px; border-radius:8px; background:#0c0e12; color:var(--fg); border:1px solid #2a2f38; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .unit { border:1px solid #2a2f38; border-radius:8px; padding:10px; margin-bottom:10px; }
+  .unit .idx { color:var(--accent); font-weight:bold; margin-right:6px; }
+  .unit .txt { white-space:pre-wrap; word-break:break-word; margin:6px 0; font-size:15px; }
+  .unit .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .status { font-size:13px; color:var(--muted); margin-top:6px; }
+  .saved { color:var(--accent); }
+  .err { color:var(--danger); }
+  audio { width:100%; margin-top:6px; }
+  .hint { color:var(--muted); font-size:13px; line-height:1.5; }
+  .pill { background:#2a2f38; border-radius:999px; padding:2px 10px; font-size:13px; color:var(--fg); }
+</style>
+</head>
+<body>
+  <h1>歌词分段录音 · WebUI</h1>
+
+  <div class="card">
+    <h3>1. 歌词（每行一句，每两行为一个录音单位）</h3>
+    <textarea id="lyricText" placeholder="在此粘贴整首歌歌词，或点击下方从文件加载…"></textarea>
+    <div class="row" style="margin-top:10px;">
+      <button id="parseBtn">解析歌词</button>
+      <button id="fileBtn" class="sec">从文件加载</button>
+      <input type="file" id="fileInput" accept=".txt" style="display:none">
+      <span class="pill" id="unitCount">未解析</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>2. 录音参数</h3>
+    <div class="row">
+      <label>位深 (bit):
+        <select id="bitDepth">
+          <option value="16">16</option>
+          <option value="24" selected>24</option>
+          <option value="32">32</option>
+        </select>
+      </label>
+      <label>文件名前缀:
+        <input type="text" id="prefix" placeholder="留空=001，填写=prefix_001" style="font-size:16px;padding:6px 8px;border-radius:8px;background:#0c0e12;color:var(--fg);border:1px solid #2a2f38;">
+      </label>
+      <span class="hint" id="rateInfo">采样率由设备决定（多为 48000Hz）</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>3. 录音单位（点「录音」开始，再点「停止并上传」）</h3>
+    <div id="unitList"><p class="hint">请先解析歌词。</p></div>
+  </div>
+
+  <p class="hint">
+    提示：手机需与本机在同一局域网。浏览器会请求麦克风权限，请允许。<br>
+    录音在手机端完成后自动编码为 WAV 并上传，生成与桌面端兼容的同名 <code>xxx.wav</code> / <code>xxx.txt</code>。<br>
+    已默认关闭回声消除/降噪/自动增益，采用高码率采集，以获取高保真原声（演唱录音无需通话处理，避免发糊）。
+  </p>
+
+  <div id="secureWarn" style="display:none; background:#5a2a2a; color:#ffd9d9;
+       border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:14px;">
+    ⚠ 当前页面不是安全连接（HTTPS）。手机浏览器会禁止访问麦克风。<br>
+    请用 <b>https://</b> 开头的地址访问本工具（启动时可加 <code>--https</code> 参数自动启用自签名证书）。
+  </div>
+
+<script>
+let units = [];   // 二维数组：[[line1,line2], ...]
+let recState = null;  // { index, mediaRecorder, chunks, stream }
+
+if (!window.isSecureContext) {
+  const w = document.getElementById('secureWarn');
+  if (w) w.style.display = 'block';
+}
+
+const $ = (id) => document.getElementById(id);
+
+$('parseBtn').onclick = async () => {
+  const text = $('lyricText').value;
+  const res = await fetch('/api/parse', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ text })
+  });
+  const data = await res.json();
+  units = data.units || [];
+  renderUnits();
+  $('unitCount').textContent = units.length ? (units.length + ' 个单位') : '未解析';
+};
+
+$('fileBtn').onclick = () => $('fileInput').click();
+$('fileInput').onchange = (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => { $('lyricText').value = reader.result; };
+  reader.readAsText(f, 'utf-8');
+};
+
+function renderUnits() {
+  const list = $('unitList');
+  list.innerHTML = '';
+  if (!units.length) { list.innerHTML = '<p class="hint">未解析出有效歌词行。</p>'; return; }
+  units.forEach((unit, i) => {
+    const index = i + 1;
+    const div = document.createElement('div');
+    div.className = 'unit';
+    div.innerHTML = `
+      <div><span class="idx">${String(index).padStart(3,'0')}</span></div>
+      <div class="txt"></div>
+      <div class="controls">
+        <button data-index="${index}">录音</button>
+        <span class="status" id="status-${index}">未录制</span>
+      </div>
+      <audio id="audio-${index}" controls style="display:none"></audio>`;
+    div.querySelector('.txt').textContent = unit.join(' / ');
+    list.appendChild(div);
+    div.querySelector('button').onclick = () => toggleRecord(index, div.querySelector('button'));
+  });
+}
+
+async function toggleRecord(index, btn) {
+  if (recState && recState.index === index) {
+    if (recState.mediaRecorder && recState.mediaRecorder.state === 'recording') {
+      recState.mediaRecorder.stop();
+      return;
+    }
+  }
+  // 停止其它正在进行的录音
+  if (recState && recState.mediaRecorder && recState.mediaRecorder.state === 'recording') {
+    try { recState.mediaRecorder.stop(); } catch (e) {}
+  }
+  const status = $('status-' + index);
+  // 安全上下文检查：麦克风仅在 HTTPS 或 localhost 下可用
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    status.className = 'status err';
+    status.textContent = '当前不是安全连接，手机浏览器禁止访问麦克风。请改用 https:// 开头的地址访问（如 https://' +
+      location.hostname + ':' + location.port + '）。';
+    return;
+  }
+  status.className = 'status';
+  status.textContent = '请求麦克风权限…';
+  // 高保真约束：关闭回声消除/噪声抑制/自动增益，避免手机走「通话/语音」窄带处理导致发糊
+  const hifi = {
+    channelCount: 1,
+    echoCancellation: false,
+    noiseSuppression: false,
+    autoGainControl: false,
+  };
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: hifi });
+  } catch (e) {
+    // 个别设备或浏览器不允许关闭处理，退回最小约束
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (e2) {
+      status.className = 'status err';
+      status.textContent = '无法访问麦克风：' + ((e2 && e2.message) || e.message) +
+        '（若已拒绝权限，请在浏览器地址栏重新允许；iOS 还需信任自签名证书）';
+      return;
+    }
+  }
+  const mr = new MediaRecorder(stream, { audioBitsPerSecond: 256000 });
+  const chunks = [];
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  mr.onstop = async () => {
+    stream.getTracks().forEach(t => t.stop());
+    status.className = 'status';
+    status.textContent = '编码中…';
+    try {
+      const blob = new Blob(chunks, { type: mr.mimeType });
+      const ab = await blob.arrayBuffer();
+      const AC = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AC();
+      const audioBuf = await audioCtx.decodeAudioData(ab);
+      const pcm = audioBuf.getChannelData(0);
+      const bits = parseInt($('bitDepth').value, 10);
+      const wavBlob = encodeWAV(pcm, audioBuf.sampleRate, bits);
+      // 预览
+      const audioEl = $('audio-' + index);
+      audioEl.src = URL.createObjectURL(wavBlob);
+      audioEl.style.display = 'block';
+      $('rateInfo').textContent = '本次采样率: ' + audioBuf.sampleRate + ' Hz';
+      // 上传
+      status.className = 'status';
+      status.textContent = '上传中…';
+      await upload(index, wavBlob, audioBuf.sampleRate, bits);
+    } catch (e) {
+      status.className = 'status err';
+      status.textContent = '处理失败：' + e.message;
+    }
+  };
+  mr.start();
+  recState = { index, mediaRecorder: mr, chunks: chunks, stream };
+  btn.textContent = '停止并上传';
+  btn.className = 'danger';
+  status.className = 'status';
+  status.textContent = '录音中…（再次点击停止）';
+}
+
+async function upload(index, wavBlob, rate, bits) {
+  const text = units[index - 1].join('\n');
+  const prefix = (document.getElementById('prefix').value || '').trim();
+  const qs = new URLSearchParams({ index, rate, bits, channels: 1, text, prefix });
+  const status = $('status-' + index);
+  try {
+    const res = await fetch('/api/upload?' + qs.toString(), { method: 'POST', body: wavBlob });
+    const data = await res.json();
+    if (data.ok) {
+      status.className = 'status saved';
+      status.textContent = '已保存 ' + data.wav + ' / ' + data.txt + '（' + data.duration.toFixed(2) + 's）';
+    } else {
+      status.className = 'status err';
+      status.textContent = '保存失败：' + (data.error || '未知错误');
+    }
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = '上传失败：' + e.message;
+  }
+  // 复位按钮
+  const btn = document.querySelector('button[data-index="' + index + '"]');
+  if (btn) { btn.textContent = '重录'; btn.className = ''; }
+  recState = null;
+}
+
+// 将单声道 Float32 PCM 编码为标准 WAV（支持 16/24/32 bit）
+function encodeWAV(samples, sampleRate, bitDepth) {
+  const numChannels = 1;
+  const bytesPerSample = bitDepth / 8;
+  let dataBytes;
+  if (bitDepth === 16) {
+    const arr = new Int16Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      arr[i] = Math.round(s * 32767);
+    }
+    dataBytes = new Uint8Array(arr.buffer);
+  } else if (bitDepth === 24) {
+    dataBytes = new Uint8Array(samples.length * 3);
+    for (let i = 0; i < samples.length; i++) {
+      let s = Math.max(-1, Math.min(1, samples[i]));
+      let v = Math.round(s * 8388607);
+      if (v < 0) v += 16777216;
+      dataBytes[i*3]   = v & 0xff;
+      dataBytes[i*3+1] = (v >> 8) & 0xff;
+      dataBytes[i*3+2] = (v >> 16) & 0xff;
+    }
+  } else { // 32 bit
+    const arr = new Int32Array(samples.length);
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      arr[i] = Math.round(s * 2147483647);
+    }
+    dataBytes = new Uint8Array(arr.buffer);
+  }
+  const buffer = new ArrayBuffer(44 + dataBytes.length);
+  const view = new DataView(buffer);
+  const writeStr = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataBytes.length, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);            // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
+  view.setUint16(32, numChannels * bytesPerSample, true);
+  view.setUint16(34, bitDepth, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataBytes.length, true);
+  new Uint8Array(buffer).set(dataBytes, 44);
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+</script>
+</body>
+</html>
