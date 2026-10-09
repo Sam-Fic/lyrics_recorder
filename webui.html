@@ -5,83 +5,113 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>歌词录音 WebUI（手机麦克风）</title>
 <style>
-  :root { --bg:#0f1115; --card:#1a1d24; --fg:#e6e6e6; --accent:#4caf50; --danger:#f44336; --muted:#9aa0a6; }
-  * { box-sizing: border-box; }
-  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
-         background:var(--bg); color:var(--fg); padding:12px; }
-  h1 { font-size:1.25rem; margin:4px 0 12px; }
-  h3 { font-size:1rem; margin:14px 0 8px; color:var(--muted); }
-  .card { background:var(--card); border-radius:10px; padding:12px; margin-bottom:12px; }
-  textarea { width:100%; height:140px; background:#0c0e12; color:var(--fg); border:1px solid #2a2f38;
-             border-radius:8px; padding:10px; font-size:16px; resize:vertical; }
-  button { font-size:16px; border:none; border-radius:8px; padding:10px 14px; color:#fff; background:var(--accent);
-           cursor:pointer; }
-  button:active { opacity:.85; }
-  button.sec { background:#3a4150; }
-  button.danger { background:var(--danger); }
-  button:disabled { opacity:.5; cursor:default; }
-  select { font-size:16px; padding:6px 8px; border-radius:8px; background:#0c0e12; color:var(--fg); border:1px solid #2a2f38; }
-  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
-  .unit { border:1px solid #2a2f38; border-radius:8px; padding:10px; margin-bottom:10px; }
-  .unit .idx { color:var(--accent); font-weight:bold; margin-right:6px; }
-  .unit .txt { white-space:pre-wrap; word-break:break-word; margin:6px 0; font-size:15px; }
-  .unit .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-  .status { font-size:13px; color:var(--muted); margin-top:6px; }
-  .saved { color:var(--accent); }
-  .err { color:var(--danger); }
-  audio { width:100%; margin-top:6px; }
-  .hint { color:var(--muted); font-size:13px; line-height:1.5; }
-  .pill { background:#2a2f38; border-radius:999px; padding:2px 10px; font-size:13px; color:var(--fg); }
+  body { margin:0;
+         background:var(--md-sys-color-background); color:var(--md-sys-color-on-background);
+         -webkit-tap-highlight-color:transparent; }
+  /* 页面节奏：16px 页面留白/区块间距/标题↔内容，12px 组内间距，8px 行内间距 */
+  /* 同心圆角：内外组件间距 16px，故 外圆角 28px − 内圆角 12px = 16px */
+  m3e-theme {
+    display:block; max-width:680px; margin:0 auto; padding:16px 16px 24px;
+    --m3e-card-shape: 28px;
+    --m3e-outlined-form-field-container-shape: 12px;
+    --m3e-select-container-shape: 12px;
+  }
+  /* 色阶层级：外层卡片 surface-container-low，内层歌词卡片 surface-container-high */
+  m3e-theme > m3e-card { --m3e-filled-card-container-color: var(--md-sys-color-surface-container-low); }
+  #unitList m3e-card { --m3e-card-shape: 12px;
+                       --m3e-filled-card-container-color: var(--md-sys-color-surface-container-high); }
+  m3e-theme > m3e-heading { margin:0 0 16px; }
+  m3e-theme > m3e-card, .warn { margin-bottom:16px; }
+  m3e-heading[slot="header"] { margin-block-end:16px; }
+  .stack { display:flex; flex-direction:column; gap:12px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .row.fields { gap:16px; align-items:flex-end; }
+  .row.fields > m3e-form-field { flex:1 1 180px; width:auto; }
+  m3e-form-field { display:block; width:100%; }
+  input, textarea { font:inherit; }
+  input { width:100%; }
+  textarea { width:100%; resize:vertical; }
+  ::placeholder { color:var(--md-sys-color-outline); }
+  /* 按钮等宽（随字号缩放，不用固定尺寸） */
+  m3e-button { min-width:7em; }
+  #unitList { display:flex; flex-direction:column; gap:12px; }
+  .idx { color:var(--md-sys-color-primary); }
+  .txt { white-space:pre-wrap; word-break:break-word; font-size:15px; line-height:1.7; }
+  .status { font-size:13px; color:var(--md-sys-color-on-surface-variant); }
+  .saved { color:var(--md-sys-color-primary); }
+  .err { color:var(--md-sys-color-error); }
+  .hint { margin:0; color:var(--md-sys-color-on-surface-variant); font-size:13px; line-height:1.7; }
+  .foot { margin-top:16px; }
+  .warn { background:var(--md-sys-color-error-container); color:var(--md-sys-color-on-error-container);
+          border-radius:28px; padding:12px 16px; font-size:14px; line-height:1.7; }
+  code { padding:1px 6px; border-radius:4px; font-size:.92em;
+         background:color-mix(in srgb, var(--md-sys-color-on-surface) 10%, transparent); }
+  audio { width:100%; }
+  .rec-danger { --m3e-filled-button-container-color: var(--md-sys-color-error);
+                --m3e-filled-button-label-text-color: var(--md-sys-color-on-error); }
 </style>
 </head>
 <body>
-  <h1>歌词分段录音 · WebUI</h1>
+<m3e-theme color="#4CAF50" variant="tonal-spot" motion="expressive">
+  <m3e-heading variant="headline" size="small" level="1">歌词分段录音 · WebUI</m3e-heading>
 
-  <div class="card">
-    <h3>1. 歌词（每行一句，每两行为一个录音单位）</h3>
-    <textarea id="lyricText" placeholder="在此粘贴整首歌歌词，或点击下方从文件加载…"></textarea>
-    <div class="row" style="margin-top:10px;">
-      <button id="parseBtn">解析歌词</button>
-      <button id="fileBtn" class="sec">从文件加载</button>
-      <input type="file" id="fileInput" accept=".txt" style="display:none">
-      <span class="pill" id="unitCount">未解析</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>2. 录音参数</h3>
-    <div class="row">
-      <label>位深 (bit):
-        <select id="bitDepth">
-          <option value="16">16</option>
-          <option value="24" selected>24</option>
-          <option value="32">32</option>
-        </select>
-      </label>
-      <label>文件名前缀:
-        <input type="text" id="prefix" placeholder="留空=001，填写=prefix_001" style="font-size:16px;padding:6px 8px;border-radius:8px;background:#0c0e12;color:var(--fg);border:1px solid #2a2f38;">
-      </label>
-      <span class="hint" id="rateInfo">采样率由设备决定（多为 48000Hz）</span>
-    </div>
-  </div>
-
-  <div class="card">
-    <h3>3. 录音单位（点「录音」开始，再点「停止并上传」）</h3>
-    <div id="unitList"><p class="hint">请先解析歌词。</p></div>
-  </div>
-
-  <p class="hint">
-    提示：手机需与本机在同一局域网。浏览器会请求麦克风权限，请允许。<br>
-    录音在手机端完成后自动编码为 WAV 并上传，生成与桌面端兼容的同名 <code>xxx.wav</code> / <code>xxx.txt</code>。<br>
-    已默认关闭回声消除/降噪/自动增益，采用高码率采集，以获取高保真原声（演唱录音无需通话处理，避免发糊）。
-  </p>
-
-  <div id="secureWarn" style="display:none; background:#5a2a2a; color:#ffd9d9;
-       border-radius:8px; padding:10px 12px; margin-bottom:12px; font-size:14px;">
+  <div id="secureWarn" class="warn" style="display:none">
     ⚠ 当前页面不是安全连接（HTTPS）。手机浏览器会禁止访问麦克风。<br>
     请用 <b>https://</b> 开头的地址访问本工具（启动时可加 <code>--https</code> 参数自动启用自签名证书）。
   </div>
 
+  <m3e-card>
+    <m3e-heading slot="header" variant="title" size="medium" level="2">1. 歌词（每行一句，每两行为一个录音单位）</m3e-heading>
+    <div slot="content" class="stack">
+      <m3e-form-field>
+        <label slot="label" for="lyricText">歌词</label>
+        <textarea id="lyricText" rows="5" placeholder="在此粘贴整首歌歌词，或点击下方从文件加载…"></textarea>
+        <m3e-textarea-autosize for="lyricText" min-rows="4" max-rows="12"></m3e-textarea-autosize>
+      </m3e-form-field>
+      <div class="row">
+        <m3e-button id="parseBtn" variant="filled">解析歌词</m3e-button>
+        <m3e-button id="fileBtn" variant="tonal">从文件加载</m3e-button>
+        <input type="file" id="fileInput" accept=".txt" style="display:none">
+        <m3e-chip id="unitCount">未解析</m3e-chip>
+      </div>
+    </div>
+  </m3e-card>
+
+  <m3e-card>
+    <m3e-heading slot="header" variant="title" size="medium" level="2">2. 录音参数</m3e-heading>
+    <div slot="content" class="stack">
+      <div class="row fields">
+        <m3e-form-field>
+          <label slot="label" for="bitDepth">位深 (bit)</label>
+          <m3e-select id="bitDepth" value="24">
+            <m3e-option value="16">16</m3e-option>
+            <m3e-option value="24">24</m3e-option>
+            <m3e-option value="32">32</m3e-option>
+          </m3e-select>
+        </m3e-form-field>
+        <m3e-form-field>
+          <label slot="label" for="prefix">文件名前缀</label>
+          <input id="prefix" type="text">
+          <span slot="hint">留空=001，填写=prefix_001</span>
+        </m3e-form-field>
+      </div>
+      <span class="hint" id="rateInfo">采样率由设备决定（多为 48000Hz）</span>
+    </div>
+  </m3e-card>
+
+  <m3e-card>
+    <m3e-heading slot="header" variant="title" size="medium" level="2">3. 录音单位（点「录音」开始，再点「停止并上传」）</m3e-heading>
+    <div slot="content" id="unitList"><p class="hint">请先解析歌词。</p></div>
+  </m3e-card>
+
+  <p class="hint foot">
+    提示：手机需与本机在同一局域网。浏览器会请求麦克风权限，请允许。<br>
+    录音在手机端完成后自动编码为 WAV 并上传，生成与桌面端兼容的同名 <code>xxx.wav</code> / <code>xxx.txt</code>。<br>
+    已默认关闭回声消除/降噪/自动增益，采用高码率采集，以获取高保真原声（演唱录音无需通话处理，避免发糊）。
+  </p>
+</m3e-theme>
+
+<script type="module" src="/m3e.min.js"></script>
 <script>
 let units = [];   // 二维数组：[[line1,line2], ...]
 let recState = null;  // { index, mediaRecorder, chunks, stream }
@@ -121,18 +151,21 @@ function renderUnits() {
   units.forEach((unit, i) => {
     const index = i + 1;
     const div = document.createElement('div');
-    div.className = 'unit';
     div.innerHTML = `
-      <div><span class="idx">${String(index).padStart(3,'0')}</span></div>
-      <div class="txt"></div>
-      <div class="controls">
-        <button data-index="${index}">录音</button>
-        <span class="status" id="status-${index}">未录制</span>
-      </div>
-      <audio id="audio-${index}" controls style="display:none"></audio>`;
+      <m3e-card variant="filled">
+        <m3e-heading slot="header" variant="title" size="small" class="idx">${String(index).padStart(3,'0')}</m3e-heading>
+        <div slot="content" class="stack">
+          <div class="txt"></div>
+          <div class="row">
+            <m3e-button data-index="${index}" variant="filled">录音</m3e-button>
+            <span class="status" id="status-${index}">未录制</span>
+          </div>
+          <audio id="audio-${index}" controls style="display:none"></audio>
+        </div>
+      </m3e-card>`;
     div.querySelector('.txt').textContent = unit.join(' / ');
     list.appendChild(div);
-    div.querySelector('button').onclick = () => toggleRecord(index, div.querySelector('button'));
+    div.querySelector('m3e-button').onclick = () => toggleRecord(index, div.querySelector('m3e-button'));
   });
 }
 
@@ -211,7 +244,7 @@ async function toggleRecord(index, btn) {
   mr.start();
   recState = { index, mediaRecorder: mr, chunks: chunks, stream };
   btn.textContent = '停止并上传';
-  btn.className = 'danger';
+  btn.classList.add('rec-danger');
   status.className = 'status';
   status.textContent = '录音中…（再次点击停止）';
 }
@@ -236,8 +269,8 @@ async function upload(index, wavBlob, rate, bits) {
     status.textContent = '上传失败：' + e.message;
   }
   // 复位按钮
-  const btn = document.querySelector('button[data-index="' + index + '"]');
-  if (btn) { btn.textContent = '重录'; btn.className = ''; }
+  const btn = document.querySelector('m3e-button[data-index="' + index + '"]');
+  if (btn) { btn.textContent = '重录'; btn.className = ''; btn.setAttribute('variant', 'tonal'); }
   recState = null;
 }
 

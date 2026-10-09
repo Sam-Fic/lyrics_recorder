@@ -493,6 +493,15 @@ def _make_web_handler(output_dir):
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_asset(self, path, ctype):
+            body = path.read_bytes() if path.exists() else b""
+            self.send_response(200 if body else 404)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if body:
+                self.wfile.write(body)
+
         def do_GET(self):
             parsed = urlparse(self.path)
             if parsed.path in ("/", "/index.html"):
@@ -507,6 +516,8 @@ def _make_web_handler(output_dir):
                     "default_channels": DEFAULT_CHANNELS,
                     "output_dir": str(Path(output_dir)),
                 })
+            elif parsed.path == "/m3e.min.js":
+                self._send_asset(BASE_DIR / "m3e.min.js", "text/javascript; charset=utf-8")
             elif parsed.path == "/favicon.ico":
                 self.send_response(204)
                 self.end_headers()
